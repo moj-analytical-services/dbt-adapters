@@ -1,6 +1,7 @@
 """AWS Lakeformation permissions management helper utilities."""
 
 from typing import Dict, List, Optional, Sequence, Set, Union
+from typing_extensions import Self
 
 from dbt_common.exceptions import DbtRuntimeError
 from mypy_boto3_lakeformation import LakeFormationClient
@@ -14,7 +15,7 @@ from mypy_boto3_lakeformation.type_defs import (
     RemoveLFTagsFromResourceResponseTypeDef,
     ResourceTypeDef,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from dbt.adapters.athena.relation import AthenaRelation
 from dbt.adapters.events.logging import AdapterLogger
@@ -188,20 +189,32 @@ class LfTagsManager:
 class FilterConfig(BaseModel):
     row_filter: str
     column_names: List[str] = []
+    excluded_column_names: List[str] = []
     principals: List[str] = []
+
+    @model_validator(mode="after")
+    def check_column_config(self) -> Self:
+        if self.column_names and self.excluded_column_names:
+            raise ValueError("Cannot specify both column_names and excluded_column_names")
+        return self
 
     def to_api_repr(
         self, catalog_id: str, database: str, table: str, name: str
     ) -> DataCellsFilterTypeDef:
-        return {
+        base_api_repr = {
             "TableCatalogId": catalog_id,
             "DatabaseName": database,
             "TableName": table,
             "Name": name,
             "RowFilter": {"FilterExpression": self.row_filter},
-            "ColumnNames": self.column_names,
-            "ColumnWildcard": {"ExcludedColumnNames": []},
         }
+
+        if self.column_names:
+            base_api_repr["ColumnNames"] = self.column_names
+        else:
+            base_api_repr["ColumnWildcard"] = {"ExcludedColumnNames": self.excluded_column_names}
+
+        return base_api_repr
 
     def to_update(self, existing: DataCellsFilterTypeDef) -> bool:
         return self.row_filter != existing["RowFilter"]["FilterExpression"] or set(
